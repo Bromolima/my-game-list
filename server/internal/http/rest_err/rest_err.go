@@ -6,8 +6,8 @@ import (
 )
 
 var (
-	ErrInvalidToken      = errors.New("the token is invalid")
-	ErrUnauthorizedToken = errors.New("the token is unauthorized")
+	ErrInvalidToken      = errors.New("The provided token is invalid")
+	ErrUnauthorizedToken = errors.New("The provided token is unauthorized")
 )
 
 type RestErr struct {

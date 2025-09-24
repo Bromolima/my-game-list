@@ -5,20 +5,24 @@ import (
 	"errors"
 	"log/slog"
 
+	"github.com/Bromolima/my-game-list/internal/entities"
+	"github.com/Bromolima/my-game-list/internal/factory"
 	resterr "github.com/Bromolima/my-game-list/internal/http/rest_err"
-	"github.com/Bromolima/my-game-list/internal/models"
 	"github.com/Bromolima/my-game-list/internal/repository"
+	"github.com/Bromolima/my-game-list/internal/security"
 	"github.com/Bromolima/my-game-list/internal/token"
+	"github.com/google/uuid"
 
 	"gorm.io/gorm"
 )
 
 type UserService interface {
-	CreateUser(context.Context, *models.User) *resterr.RestErr
-	FindUser(context.Context, string) (*models.User, *resterr.RestErr)
-	UpdateUser(context.Context, *models.User) *resterr.RestErr
-	DeleteUser(context.Context, string) *resterr.RestErr
-	Login(context.Context, *models.User) (*models.User, string, *resterr.RestErr)
+	RegisterUser(ctx context.Context, email, password, username, avatarURL string) *resterr.RestErr
+	FindUser(ctx context.Context, id string) (*entities.User, *resterr.RestErr)
+	SearchUsers(ctx context.Context, page *entities.Page[entities.User], query string) (*entities.Page[entities.User], *resterr.RestErr)
+	UpdateUser(ctx context.Context, id uuid.UUID, email, password, username, avatarURL string) *resterr.RestErr
+	DeleteUser(ctx context.Context, id string) *resterr.RestErr
+	Login(ctx context.Context, email, password string) (string, *resterr.RestErr)
 }
 
 type userService struct {
@@ -35,90 +39,144 @@ func NewUserService(repository repository.UserRepository, tokenService token.Jwt
 	}
 }
 
-func (s *userService) CreateUser(ctx context.Context, user *models.User) *resterr.RestErr {
-	log := s.logger.With(slog.String("func", "CreateUser"))
+func (s *userService) RegisterUser(ctx context.Context, email, password, username, avatarURL string) *resterr.RestErr {
+	log := s.logger.With(slog.String("func", "RegisterUser"))
 
-	userExists, err := s.repository.FindUserByEmail(ctx, user.Email)
+	userExists, err := s.repository.FindByEmail(ctx, email)
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		log.Error("failed to find user by email", slog.String("error", err.Error()))
-		return resterr.NewInternalServerErr("Error trying to find user by Email")
+		log.Error("Failed to find user by email", slog.String("error", err.Error()))
+		return resterr.NewInternalServerErr("An error occurred while finding the user by email")
 	}
 
 	if userExists != nil {
-		log.Warn("email already registered")
-		return resterr.NewBadRequestError("Email is already registeresd in another account")
+		log.Warn("The provided email is already registered")
+		return resterr.NewBadRequestError("The provided email is already registered")
 	}
 
-	user.Password, err = models.HashPassword(user.Password)
+	hashedPassword, err := security.HashPassword(password)
 	if err != nil {
-		log.Error("failed to hash password", slog.String("error", err.Error()))
-		return resterr.NewInternalServerErr("Failed to hash password")
+		log.Error("Failed to hash password", slog.String("error", err.Error()))
+		return resterr.NewInternalServerErr("An error occurred while hashing the password")
 	}
 
-	if err := s.repository.CreateUser(ctx, user); err != nil {
-		log.Error("failed to create user", slog.String("error", err.Error()))
-		return resterr.NewInternalServerErr("Error trying to create user")
+	user := factory.NewUser(email, hashedPassword, username, avatarURL, entities.RoleUserID)
+	if err := s.repository.Create(ctx, user); err != nil {
+		log.Error("Failed to create user in database", slog.String("error", err.Error()))
+		return resterr.NewInternalServerErr("An error occurred while creating the user")
 	}
 
 	return nil
 }
 
-func (s *userService) FindUser(ctx context.Context, id string) (*models.User, *resterr.RestErr) {
+func (s *userService) Login(ctx context.Context, email, password string) (string, *resterr.RestErr) {
+	log := s.logger.With(slog.String("func", "Login"))
+
+	userExists, err := s.repository.FindByEmail(ctx, email)
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		log.Error("Failed to find user by email", slog.String("error", err.Error()))
+		return "", resterr.NewInternalServerErr("An error occurred while finding the user")
+	}
+
+	if userExists == nil {
+		log.Warn("The requested user was not found")
+		return "", resterr.NewNotFoundError("The requested user was not found")
+	}
+
+	if !security.CheckPassword(userExists.Password, password) {
+		log.Warn("Invalid credentials provided")
+		return "", resterr.NewUnauthorizedError("Invalid credentials provided")
+	}
+
+	token, err := s.tokenService.GenerateToken(userExists)
+	if err != nil {
+		log.Error("Failed to generate token", slog.String("error", err.Error()))
+		return "", resterr.NewInternalServerErr("An error occurred while generating the token")
+	}
+
+	return token, nil
+}
+
+func (s *userService) FindUser(ctx context.Context, id string) (*entities.User, *resterr.RestErr) {
 	log := s.logger.With(slog.String("func", "FindUser"))
 
-	user, err := s.repository.FindUser(ctx, id)
+	user, err := s.repository.Find(ctx, uuid.MustParse(id))
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			log.Warn("user not found")
-			return nil, resterr.NewNotFoundError("User not found")
+			log.Warn("The requested user was not found")
+			return nil, resterr.NewNotFoundError("The requested user was not found")
 		}
 
-		log.Error("failed to find user", slog.String("error", err.Error()))
-		return nil, resterr.NewInternalServerErr("Error trying to find user")
+		log.Error("Failed to find user in database", slog.String("error", err.Error()))
+		return nil, resterr.NewInternalServerErr("An error occurred while finding the user")
 	}
 
 	return user, nil
 }
 
-func (s *userService) UpdateUser(ctx context.Context, user *models.User) *resterr.RestErr {
-	log := s.logger.With(slog.String("func", "UpdateUser"))
+func (s *userService) SearchUsers(ctx context.Context, page *entities.Page[entities.User], query string) (*entities.Page[entities.User], *resterr.RestErr) {
+	log := s.logger.With(slog.String("func", "SearchUsers"))
 
-	_, err := s.repository.FindUserByEmail(ctx, user.Email)
+	page, err := s.repository.Search(ctx, page, query)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			log.Warn("user not found")
-			return resterr.NewNotFoundError("User not found")
+			log.Warn("No users were found for the given query")
+			return nil, resterr.NewNotFoundError("No users were found for the given query")
 		}
 
-		log.Error("failed to find user by email", slog.String("error", err.Error()))
-		return resterr.NewInternalServerErr("Error trying to find user")
+		log.Error("Failed to search for users in database", slog.String("error", err.Error()))
+		return nil, resterr.NewInternalServerErr("An error occurred while searching for users")
 	}
 
-	if err := s.repository.UpdateUser(ctx, user); err != nil {
-		log.Error("failed to update user", slog.String("error", err.Error()))
-		return resterr.NewInternalServerErr("Error trying to update user")
+	return page, nil
+}
+
+func (s *userService) UpdateUser(ctx context.Context, id uuid.UUID, email, password, username, avatarURL string) *resterr.RestErr {
+	log := s.logger.With(slog.String("func", "UpdateUser"))
+
+	_, err := s.repository.FindByEmail(ctx, email)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			log.Warn("The requested user was not found")
+			return resterr.NewNotFoundError("The requested user was not found")
+		}
+
+		log.Error("Failed to find user by email", slog.String("error", err.Error()))
+		return resterr.NewInternalServerErr("An error occurred while finding the user")
+	}
+
+	hashedPassword, err := security.HashPassword(password)
+	if err != nil {
+		log.Error("Failed to hash password", slog.String("error", err.Error()))
+		return resterr.NewInternalServerErr("An error occurred while hashing the password")
+	}
+
+	user := factory.NewUserUpdate(id, email, hashedPassword, username, avatarURL)
+	if err := s.repository.Update(ctx, user); err != nil {
+		log.Error("Failed to update user in database", slog.String("error", err.Error()))
+		return resterr.NewInternalServerErr("An error occurred while updating the user")
 	}
 
 	return nil
 }
 
-func (s *userService) DeleteUser(ctx context.Context, ID string) *resterr.RestErr {
+func (s *userService) DeleteUser(ctx context.Context, id string) *resterr.RestErr {
 	log := s.logger.With(slog.String("func", "DeleteUser"))
 
-	_, err := s.repository.FindUser(ctx, ID)
+	uniqueID := uuid.MustParse(id)
+	_, err := s.repository.Find(ctx, uniqueID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			log.Warn("user not found")
-			return resterr.NewNotFoundError("User not found")
+			log.Warn("The requested user was not found")
+			return resterr.NewNotFoundError("The requested user was not found")
 		}
 
-		log.Error("failed to find user", slog.String("error", err.Error()))
-		return resterr.NewInternalServerErr("Error trying to find user")
+		log.Error("Failed to find user in database", slog.String("error", err.Error()))
+		return resterr.NewInternalServerErr("An error occurred while finding the user")
 	}
 
-	if err := s.repository.DeleteUser(ctx, ID); err != nil {
-		log.Error("failed to delete user", slog.String("error", err.Error()))
-		return resterr.NewInternalServerErr("Error trying to update user")
+	if err := s.repository.Delete(ctx, uniqueID); err != nil {
+		log.Error("Failed to delete user from database", slog.String("error", err.Error()))
+		return resterr.NewInternalServerErr("An error occurred while deleting the user")
 	}
 
 	return nil

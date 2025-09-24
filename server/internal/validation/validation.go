@@ -32,7 +32,7 @@ func ValidateUserError(validationErr error) *resterr.RestErr {
 	var jsonValidationError validator.ValidationErrors
 
 	if errors.As(validationErr, &jsonErr) {
-		return resterr.NewBadRequestError("Invalid field type")
+		return resterr.NewBadRequestError("The provided field type is invalid")
 	}
 
 	if errors.As(validationErr, &jsonValidationError) {
@@ -47,8 +47,8 @@ func ValidateUserError(validationErr error) *resterr.RestErr {
 			errorsCauses = append(errorsCauses, cause)
 		}
 
-		return resterr.NewBadRequestValidationError("Some fields are invalid", errorsCauses)
+		return resterr.NewBadRequestValidationError("One or more fields are invalid", errorsCauses)
 	}
 
-	return resterr.NewBadRequestError("Error trying to convert field")
+	return resterr.NewBadRequestError("An error occurred while converting the field")
 }

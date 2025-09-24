@@ -4,90 +4,58 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/Bromolima/my-game-list/internal/models"
+	"github.com/Bromolima/my-game-list/internal/entities"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
+//go:generate mockgen -source=user.go -destination=../../mocks/user_repository.go -package=mocks
 type UserRepository interface {
-	CreateUser(context.Context, *models.User) error
-	FindUser(context.Context, string) (*models.User, error)
-	FindUserByEmail(context.Context, string) (*models.User, error)
-	UpdateUser(context.Context, *models.User) error
-	DeleteUser(context.Context, string) error
+	BaseRepository[entities.User, uuid.UUID]
+	FindByEmail(ctx context.Context, email string) (*entities.User, error)
+	Search(ctx context.Context, page *entities.Page[entities.User], query string) (*entities.Page[entities.User], error)
 }
 
 type userRepository struct {
-	db     *gorm.DB
-	logger *slog.Logger
+	BaseRepository[entities.User, uuid.UUID]
+	db             *gorm.DB
+	pageRepository PageRepository[entities.User]
+	logger         *slog.Logger
 }
 
-func NewUserRepository(db *gorm.DB, logger *slog.Logger) UserRepository {
+func NewUserRepository(db *gorm.DB, pageRepository PageRepository[entities.User], logger *slog.Logger) UserRepository {
 	return &userRepository{
-		db:     db,
-		logger: logger.With(slog.String("repository", "user")),
+		BaseRepository: NewBaseRepository[entities.User, uuid.UUID](db, logger),
+		db:             db,
+		pageRepository: pageRepository,
+		logger:         logger.With(slog.String("repository", "user")),
 	}
 }
 
-func (r *userRepository) CreateUser(ctx context.Context, user *models.User) error {
-	log := r.logger.With(slog.String("func", "CreateUser"))
+func (r *userRepository) FindByEmail(ctx context.Context, email string) (*entities.User, error) {
+	log := r.logger.With(slog.String("func", "FindByEmail"))
 
-	user.ID = uuid.NewString()
-	if err := r.db.WithContext(ctx).Save(user).Error; err != nil {
-		log.Error("failed to create user", slog.String("error", err.Error()))
-		return err
-	}
-
-	return nil
-}
-
-func (r *userRepository) FindUser(ctx context.Context, id string) (*models.User, error) {
-	log := r.logger.With(slog.String("func", "FindUser"))
-
-	var user models.User
-	if err := r.db.WithContext(ctx).Where("id = ?", id).First(&user).Error; err != nil {
-		log.Error("failed to find user", slog.String("error", err.Error()))
-		return nil, err
-	}
-
-	return &user, nil
-}
-
-func (r *userRepository) FindUserByEmail(ctx context.Context, email string) (*models.User, error) {
-	log := r.logger.With(slog.String("func", "FindUserByEmail"))
-
-	var user models.User
+	var user entities.User
 	if err := r.db.WithContext(ctx).Where("email = ?", email).First(&user).Error; err != nil {
-		log.Error("failed to find user by email", slog.String("error", err.Error()))
+		log.Error("Failed to find user by email in database", slog.String("error", err.Error()))
 		return nil, err
 	}
-
 	return &user, nil
 }
 
-func (r *userRepository) UpdateUser(ctx context.Context, user *models.User) error {
-	log := r.logger.With(slog.String("func", "UpdateUser"))
+func (r *userRepository) Search(ctx context.Context, page *entities.Page[entities.User], query string) (*entities.Page[entities.User], error) {
+	log := r.logger.With(slog.String("func", "Search"))
 
-	if err := r.db.WithContext(ctx).Save(user).Error; err != nil {
-		log.Error("failed to update user", slog.String("error", err.Error()))
-		return err
+	search := "%" + query + "%"
+	var data []entities.User
+	if err := r.db.WithContext(ctx).
+		Scopes(r.pageRepository.Paginate(&entities.User{}, page)).
+		Where("username LIKE ?", search).
+		Find(&data).Error; err != nil {
+		log.Error("Failed to search users in database", slog.String("error", err.Error()))
+		return nil, err
 	}
 
-	return nil
-}
-
-func (r *userRepository) DeleteUser(ctx context.Context, id string) error {
-	log := r.logger.With(slog.String("func", "DeleteUser"))
-
-	uniqueID, err := uuid.Parse(id)
-	if err != nil {
-		log.Error("failed to parse uuid", slog.String("error", err.Error()))
-		return err
-	}
-
-	if err := r.db.WithContext(ctx).Delete(&models.User{}, uniqueID).Error; err != nil {
-		log.Error("failed to delete user", slog.String("error", err.Error()))
-	}
-
-	return nil
+	page.Data = data
+	return page, nil
 }

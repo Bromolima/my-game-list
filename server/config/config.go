@@ -12,7 +12,7 @@ var Env Environment
 func LoadEnvironment() error {
 	err := godotenv.Load()
 	if err != nil {
-		slog.Error("failed to load environment variables", slog.String("error", err.Error()))
+		slog.Error("An error occurred while loading the environment variables", slog.String("error", err.Error()))
 		return err
 	}
 

@@ -38,7 +38,7 @@ func SetupPostgresConnection() (*gorm.DB, error) {
 	})
 
 	if err != nil {
-		slog.Error("failed to connect to database", slog.String("error", err.Error()))
+		slog.Error("An error occurred while connecting to the database", slog.String("error", err.Error()))
 		return nil, err
 	}
 

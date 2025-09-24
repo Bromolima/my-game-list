@@ -1,15 +1,6 @@
-package models
+package security
 
-import (
-	"golang.org/x/crypto/bcrypt"
-)
-
-type User struct {
-	ID       string `gorm:"primaryKey;type:uuid"`
-	Email    string `gorm:"type:varchar(255);not null"`
-	Password string `gorm:"type:varchar(100);not null"`
-	Username string `gorm:"type:varchar(100);not null"`
-}
+import "golang.org/x/crypto/bcrypt"
 
 func HashPassword(password string) (string, error) {
 	bytes, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
